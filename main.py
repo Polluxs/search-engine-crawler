@@ -314,98 +314,78 @@ async def insert_domain_record(conn, domain_name, analysis_json):
     """Insert analyzed data into the domain table."""
     domain_id = uuid.uuid5(uuid.NAMESPACE_URL, domain_name)
     
-    try:
-        # Parse the analysis JSON to extract semantic fields
-        analysis_data = json.loads(analysis_json)
-        suggested_fields = analysis_data.get("suggested_fields", {})
-        
-        # Prepare values with defaults
-        semantic_summary = analysis_data.get("raw_content", "")[:2000]  # Truncate if too long
-        content_type = suggested_fields.get("semantic_content_type_text", "unknown")
-        primary_topic = suggested_fields.get("semantic_primary_topic_text", "unknown")
-        keywords = suggested_fields.get("semantic_keywords_text_array", [])
-        language = suggested_fields.get("semantic_language_primary_text", "en")
-        communication_goal = suggested_fields.get("semantic_communication_goal_text", "unknown")
-        author_type = suggested_fields.get("semantic_author_type_text", "unknown")
-        audience_type = suggested_fields.get("semantic_audience_type_text", "unknown")
-        content_vibe = suggested_fields.get("semantic_content_vibe_text", "unknown")
-        is_commercial = suggested_fields.get("semantic_is_commercial_bool", False)
-        is_spammy = suggested_fields.get("semantic_is_spammy_bool", False)
-        is_politically_loaded = suggested_fields.get("semantic_is_politically_loaded_bool", False)
-        quality_score = suggested_fields.get("semantic_quality_score_float")
-        has_comments = suggested_fields.get("semantic_has_comments_bool", False)
-        has_about_page = analysis_data.get("has_about_page", False)
-        
-        await conn.execute("""
-            INSERT INTO domain (
-                domain_id_uuid,
-                domain_name_text,
-                semantic_content_type_text,
-                semantic_primary_topic_text,
-                semantic_keywords_text_array,
-                semantic_language_primary_text,
-                semantic_communication_goal_text,
-                semantic_author_type_text,
-                semantic_audience_type_text,
-                semantic_content_vibe_text,
-                semantic_is_commercial_bool,
-                semantic_is_spammy_bool,
-                semantic_is_politically_loaded_bool,
-                semantic_quality_score_float,
-                semantic_has_comments_bool,
-                semantic_summary_text,
-                crawl_first_seen_at_ts,
-                crawl_last_attempt_at_ts,
-                crawl_status_text,
-                crawl_processed_at_ts,
-                crawl_has_about_bool,
-                audit_created_at_ts,
-                audit_updated_at_ts
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now(), 'success', now(), $17, now(), now())
-            ON CONFLICT (domain_name_text) DO UPDATE SET
-                semantic_content_type_text = EXCLUDED.semantic_content_type_text,
-                semantic_primary_topic_text = EXCLUDED.semantic_primary_topic_text,
-                semantic_keywords_text_array = EXCLUDED.semantic_keywords_text_array,
-                semantic_language_primary_text = EXCLUDED.semantic_language_primary_text,
-                semantic_communication_goal_text = EXCLUDED.semantic_communication_goal_text,
-                semantic_author_type_text = EXCLUDED.semantic_author_type_text,
-                semantic_audience_type_text = EXCLUDED.semantic_audience_type_text,
-                semantic_content_vibe_text = EXCLUDED.semantic_content_vibe_text,
-                semantic_is_commercial_bool = EXCLUDED.semantic_is_commercial_bool,
-                semantic_is_spammy_bool = EXCLUDED.semantic_is_spammy_bool,
-                semantic_is_politically_loaded_bool = EXCLUDED.semantic_is_politically_loaded_bool,
-                semantic_quality_score_float = EXCLUDED.semantic_quality_score_float,
-                semantic_has_comments_bool = EXCLUDED.semantic_has_comments_bool,
-                semantic_summary_text = EXCLUDED.semantic_summary_text,
-                crawl_last_attempt_at_ts = now(),
-                crawl_processed_at_ts = now(),
-                crawl_has_about_bool = EXCLUDED.crawl_has_about_bool,
-                audit_updated_at_ts = now();
-        """, 
-        domain_id, domain_name, content_type, primary_topic, keywords, language,
-        communication_goal, author_type, audience_type, content_vibe, is_commercial,
-        is_spammy, is_politically_loaded, quality_score, has_comments, semantic_summary, has_about_page)
-        
-    except (json.JSONDecodeError, KeyError, Exception) as e:
-        logging.warning(f"Error parsing analysis data for {domain_name}: {e}")
-        # Fallback insert with minimal data
-        await conn.execute("""
-            INSERT INTO domain (
-                domain_id_uuid,
-                domain_name_text,
-                semantic_content_type_text,
-                semantic_summary_text,
-                crawl_first_seen_at_ts,
-                crawl_last_attempt_at_ts,
-                crawl_status_text,
-                audit_created_at_ts,
-                audit_updated_at_ts
-            )
-            VALUES ($1, $2, 'error', $3, now(), now(), 'analysis_error', now(), now())
-            ON CONFLICT (domain_name_text) DO NOTHING;
-        """, domain_id, domain_name, str(analysis_json)[:2000])
+    # Parse the analysis JSON to extract semantic fields
+    analysis_data = json.loads(analysis_json)
+    suggested_fields = analysis_data.get("suggested_fields", {})
 
+    # Prepare values with defaults
+    semantic_summary = analysis_data.get("raw_content", "")[:2000]  # Truncate if too long
+    content_type = suggested_fields.get("semantic_content_type_text", "unknown")
+    primary_topic = suggested_fields.get("semantic_primary_topic_text", "unknown")
+    keywords = suggested_fields.get("semantic_keywords_text_array", [])
+    language = suggested_fields.get("semantic_language_primary_text", "en")
+    communication_goal = suggested_fields.get("semantic_communication_goal_text", "unknown")
+    author_type = suggested_fields.get("semantic_author_type_text", "unknown")
+    audience_type = suggested_fields.get("semantic_audience_type_text", "unknown")
+    content_vibe = suggested_fields.get("semantic_content_vibe_text", "unknown")
+    is_commercial = suggested_fields.get("semantic_is_commercial_bool", False)
+    is_spammy = suggested_fields.get("semantic_is_spammy_bool", False)
+    is_politically_loaded = suggested_fields.get("semantic_is_politically_loaded_bool", False)
+    quality_score = suggested_fields.get("semantic_quality_score_float")
+    has_comments = suggested_fields.get("semantic_has_comments_bool", False)
+    has_about_page = analysis_data.get("has_about_page", False)
+
+    await conn.execute("""
+        INSERT INTO domain (
+            domain_id_uuid,
+            domain_name_text,
+            semantic_content_type_text,
+            semantic_primary_topic_text,
+            semantic_keywords_text_array,
+            semantic_language_primary_text,
+            semantic_communication_goal_text,
+            semantic_author_type_text,
+            semantic_audience_type_text,
+            semantic_content_vibe_text,
+            semantic_is_commercial_bool,
+            semantic_is_spammy_bool,
+            semantic_is_politically_loaded_bool,
+            semantic_quality_score_float,
+            semantic_has_comments_bool,
+            semantic_summary_text,
+            crawl_first_seen_at_ts,
+            crawl_last_attempt_at_ts,
+            crawl_status_text,
+            crawl_processed_at_ts,
+            crawl_has_about_bool,
+            audit_created_at_ts,
+            audit_updated_at_ts
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now(), 'success', now(), $17, now(), now())
+        ON CONFLICT (domain_name_text) DO UPDATE SET
+            semantic_content_type_text = EXCLUDED.semantic_content_type_text,
+            semantic_primary_topic_text = EXCLUDED.semantic_primary_topic_text,
+            semantic_keywords_text_array = EXCLUDED.semantic_keywords_text_array,
+            semantic_language_primary_text = EXCLUDED.semantic_language_primary_text,
+            semantic_communication_goal_text = EXCLUDED.semantic_communication_goal_text,
+            semantic_author_type_text = EXCLUDED.semantic_author_type_text,
+            semantic_audience_type_text = EXCLUDED.semantic_audience_type_text,
+            semantic_content_vibe_text = EXCLUDED.semantic_content_vibe_text,
+            semantic_is_commercial_bool = EXCLUDED.semantic_is_commercial_bool,
+            semantic_is_spammy_bool = EXCLUDED.semantic_is_spammy_bool,
+            semantic_is_politically_loaded_bool = EXCLUDED.semantic_is_politically_loaded_bool,
+            semantic_quality_score_float = EXCLUDED.semantic_quality_score_float,
+            semantic_has_comments_bool = EXCLUDED.semantic_has_comments_bool,
+            semantic_summary_text = EXCLUDED.semantic_summary_text,
+            crawl_last_attempt_at_ts = now(),
+            crawl_processed_at_ts = now(),
+            crawl_has_about_bool = EXCLUDED.crawl_has_about_bool,
+            audit_updated_at_ts = now();
+    """,
+    domain_id, domain_name, content_type, primary_topic, keywords, language,
+    communication_goal, author_type, audience_type, content_vibe, is_commercial,
+    is_spammy, is_politically_loaded, quality_score, has_comments, semantic_summary, has_about_page)
+        
 async def try_about_page(page, domain):
     """Try to navigate to /about page and check if it exists and has content."""
     about_urls = [
