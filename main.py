@@ -9,15 +9,20 @@ from dotenv import load_dotenv
 import os
 import spacy
 from langdetect import detect, LangDetectException
+from openai import AsyncOpenAI
 
 # Load environment variables
 load_dotenv()
 DB_URL = os.getenv("POSTGRES_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 
 # Load spaCy model
 nlp = spacy.load("en_core_web_sm")
+
+# Initialize OpenAI client
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 async def claim_one_domain(conn):
     """Claim and lock the next available domain for crawling."""
@@ -98,11 +103,11 @@ def detect_language(text):
     """Detect primary language of text content."""
     try:
         if len(text.strip()) < 20:
-            return "en"  # Default to English for short text
+            return "unknown"  # Default to English for short text
         detected = detect(text)
         return detected if detected else "en"
     except (LangDetectException, Exception):
-        return "en"
+        return "unknown"
 
 def analyze_content_type(title, text, url_path=""):
     """Analyze content type based on title, text, and URL patterns."""
@@ -166,123 +171,144 @@ def detect_has_comments(page_html):
     html_lower = page_html.lower()
     return any(indicator in html_lower for indicator in comment_indicators)
 
+async def analyze_with_llm(title, cleaned_text, url, has_comments):
+    """Use OpenAI LLM to analyze page content and return structured semantic data."""
+    try:
+        # Create prompt for LLM analysis
+        prompt = f"""Analyze this website content and provide semantic classification in valid JSON format.
+
+WEBSITE DATA:
+Title: {title}
+URL: {url}
+Content: {cleaned_text[:2000]}  # Limit content to stay within token limits
+Has Comments: {has_comments}
+
+Please analyze this content and return a JSON object with the following fields:
+
+{{
+  "semantic_content_type_text": "blog|forum|docs|ecommerce|news|portfolio|corporate|personal|marketplace|landing|other",
+  "semantic_primary_topic_text": "main topic in 1-2 words (e.g., 'technology', 'art', 'fitness')",
+  "semantic_keywords_text_array": ["5-10 most relevant keywords/phrases"],
+  "semantic_language_primary_text": "language code (e.g., 'en', 'es', 'fr')",
+  "semantic_communication_goal_text": "sell|teach|inform|share|entertain|rant|advertise",
+  "semantic_author_type_text": "individual|company|organization|government|unknown",
+  "semantic_audience_type_text": "general|beginner|expert|professional|consumer|developer",
+  "semantic_content_vibe_text": "professional|casual|academic|commercial|personal|technical|creative",
+  "semantic_is_commercial_bool": true/false,
+  "semantic_is_spammy_bool": true/false,
+  "semantic_is_politically_loaded_bool": true/false,
+  "semantic_quality_score_float": 0.0-1.0,
+  "semantic_has_comments_bool": {has_comments}
+}}
+
+Rules:
+- Be accurate and specific
+- Use the exact field names provided
+- Return only valid JSON
+- Quality score: 0.8+ for high quality, 0.5-0.8 for decent, 0.5- for poor
+- Consider the URL structure and domain name in your analysis"""
+
+        response = await openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert web content analyst. Return only valid JSON as requested."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=500
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Parse the LLM response
+        try:
+            llm_analysis = json.loads(response_text)
+            return llm_analysis
+        except json.JSONDecodeError:
+            # Try to extract JSON from response if LLM added extra text
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                llm_analysis = json.loads(json_match.group())
+                return llm_analysis
+            else:
+                raise ValueError("LLM response is not valid JSON")
+                
+    except Exception as e:
+        logging.warning(f"LLM analysis failed: {e}")
+        return None
+
 async def analyze_page(page):
     """Extract and analyze page content for structured semantic analysis."""
-    try:
-        await page.wait_for_selector("body", timeout=10000)
-        
-        # Extract basic metadata
-        title = await page.title()
-        url = page.url
-        
-        # Get full HTML for comment detection
-        page_html = await page.content()
-        
-        # Extract text content from body, excluding script/style tags
+    await page.wait_for_selector("body", timeout=10000)
+
+    # Extract basic metadata
+    title = await page.title()
+    url = page.url
+
+    # Get full HTML for comment detection
+    page_html = await page.content()
+
+    # Extract text content from body_text, excluding script/style tags
+    body_text = await page.evaluate("""
+        () => {
+            // Remove script and style elements
+            const scripts = document.querySelectorAll('script, style, nav, footer, header');
+            scripts.forEach(el => el.remove());
+            
+            // Get main content areas first
+            return document.querySelector('main, [role="main"], .content, .main-content, article');
+        }
+    """)
+
+    if not body_text or len(body_text.strip()) < 50:
         body_text = await page.evaluate("""
             () => {
                 // Remove script and style elements
                 const scripts = document.querySelectorAll('script, style, nav, footer, header');
                 scripts.forEach(el => el.remove());
-                
-                // Get main content areas first
-                const main = document.querySelector('main, [role="main"], .content, .main-content, article');
-                if (main) {
-                    return main.innerText;
-                }
-                
+
                 // Fallback to body
                 return document.body.innerText;
             }
         """)
-        
-        if not body_text or len(body_text.strip()) < 50:
-            return json.dumps({
-                "raw_content": "Insufficient content extracted",
-                "suggested_fields": {
-                    "semantic_content_type_text": "minimal",
-                    "semantic_primary_topic_text": "unknown",
-                    "semantic_keywords_text_array": [],
-                    "semantic_language_primary_text": "en",
-                    "semantic_communication_goal_text": "unknown",
-                    "semantic_is_commercial_bool": False,
-                    "semantic_has_comments_bool": False
-                },
-                "analysis_tokens": []
-            })
-        
-        # Clean and normalize text
-        cleaned_text = re.sub(r'\s+', ' ', body_text.strip())
-        cleaned_text = re.sub(r'[^\w\s\-\.\,\!\?]', ' ', cleaned_text)
-        
-        # Extract important tokens for LLM analysis
-        key_tokens = extract_important_tokens(cleaned_text, max_tokens=400)
-        
-        # Create summary for semantic_summary_text (500 tokens max)
-        summary_tokens = key_tokens[:100]  
-        raw_content_for_llm = " ".join(summary_tokens)
-        
-        # Detect language
-        language = detect_language(cleaned_text)
-        
-        # Analyze content characteristics
-        content_type = analyze_content_type(title, cleaned_text)
-        is_commercial = detect_commercial_intent(title, cleaned_text)
-        communication_goal = detect_communication_goal(title, cleaned_text, content_type)
-        has_comments = detect_has_comments(page_html)
-        
-        # Extract primary topic from most important tokens
-        primary_topic = "unknown"
-        if key_tokens:
-            # Use the first significant noun or entity as primary topic
-            for token in key_tokens[:10]:
-                if len(token) > 3 and token.lower() not in ["page", "site", "website", "home", "blog"]:
-                    primary_topic = token.lower()
-                    break
-        
-        # Create keywords array from key tokens
-        keywords = list(set([token.lower() for token in key_tokens[:20] if len(token) > 2]))
-        
-        # Structure the output for LLM analysis
+
+
+    if not body_text or len(body_text.strip()) < 50:
+        raise Exception("Body is too short")
+
+    # Clean and normalize text
+    cleaned_text = re.sub(r'\s+', ' ', body_text.strip())
+    cleaned_text = re.sub(r'[^\w\s\-\.\,\!\?]', ' ', cleaned_text)
+
+    # Extract important tokens for content preparation
+    key_tokens = extract_important_tokens(cleaned_text, max_tokens=400)
+
+    # Create clean content for LLM analysis (limit to ~500 tokens)
+    summary_tokens = key_tokens[:100]
+    raw_content_for_llm = " ".join(summary_tokens)
+
+    # Detect comments first (simple rule-based check)
+    has_comments = detect_has_comments(page_html)
+
+    # Use LLM for semantic analysis
+    llm_analysis = await analyze_with_llm(title, cleaned_text, url, has_comments)
+
+    if llm_analysis:
+        # LLM analysis successful
         analysis_data = {
-            "raw_content": raw_content_for_llm,  # For LLM to analyze and enhance
-            "suggested_fields": {
-                "semantic_content_type_text": content_type,
-                "semantic_primary_topic_text": primary_topic,
-                "semantic_keywords_text_array": keywords,
-                "semantic_language_primary_text": language,
-                "semantic_communication_goal_text": communication_goal,
-                "semantic_author_type_text": "unknown",  # LLM can determine this
-                "semantic_audience_type_text": "unknown",  # LLM can determine this
-                "semantic_content_vibe_text": "unknown",  # LLM can determine this
-                "semantic_is_commercial_bool": is_commercial,
-                "semantic_is_spammy_bool": False,  # LLM can determine this
-                "semantic_is_politically_loaded_bool": False,  # LLM can determine this
-                "semantic_quality_score_float": None,  # LLM can score this
-                "semantic_has_comments_bool": has_comments
-            },
-            "analysis_tokens": key_tokens[:50],  # Additional tokens for LLM reference
+            "raw_content": raw_content_for_llm,
+            "suggested_fields": llm_analysis,
+            "analysis_tokens": key_tokens[:50],
             "title": title[:100],
             "url": url
         }
+    else:
+        # LLM analysis failed - raise exception to fail the crawl
+        raise Exception("LLM semantic analysis failed")
+
+    return json.dumps(analysis_data, ensure_ascii=False)
         
-        return json.dumps(analysis_data, ensure_ascii=False)
-        
-    except Exception as e:
-        logging.warning(f"Error in analyze_page: {e}")
-        return json.dumps({
-            "raw_content": f"Analysis failed: {str(e)}",
-            "suggested_fields": {
-                "semantic_content_type_text": "error",
-                "semantic_primary_topic_text": "error",
-                "semantic_keywords_text_array": [],
-                "semantic_language_primary_text": "en",
-                "semantic_communication_goal_text": "unknown",
-                "semantic_is_commercial_bool": False,
-                "semantic_has_comments_bool": False
-            },
-            "analysis_tokens": []
-        })
+
 
 async def insert_domain_record(conn, domain_name, analysis_json):
     """Insert analyzed data into the domain table."""
@@ -308,6 +334,7 @@ async def insert_domain_record(conn, domain_name, analysis_json):
         is_politically_loaded = suggested_fields.get("semantic_is_politically_loaded_bool", False)
         quality_score = suggested_fields.get("semantic_quality_score_float")
         has_comments = suggested_fields.get("semantic_has_comments_bool", False)
+        has_about_page = analysis_data.get("has_about_page", False)
         
         await conn.execute("""
             INSERT INTO domain (
@@ -331,10 +358,11 @@ async def insert_domain_record(conn, domain_name, analysis_json):
                 crawl_last_attempt_at_ts,
                 crawl_status_text,
                 crawl_processed_at_ts,
+                crawl_has_about_bool,
                 audit_created_at_ts,
                 audit_updated_at_ts
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now(), 'success', now(), now(), now())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now(), 'success', now(), $17, now(), now())
             ON CONFLICT (domain_name_text) DO UPDATE SET
                 semantic_content_type_text = EXCLUDED.semantic_content_type_text,
                 semantic_primary_topic_text = EXCLUDED.semantic_primary_topic_text,
@@ -352,11 +380,12 @@ async def insert_domain_record(conn, domain_name, analysis_json):
                 semantic_summary_text = EXCLUDED.semantic_summary_text,
                 crawl_last_attempt_at_ts = now(),
                 crawl_processed_at_ts = now(),
+                crawl_has_about_bool = EXCLUDED.crawl_has_about_bool,
                 audit_updated_at_ts = now();
         """, 
         domain_id, domain_name, content_type, primary_topic, keywords, language,
         communication_goal, author_type, audience_type, content_vibe, is_commercial,
-        is_spammy, is_politically_loaded, quality_score, has_comments, semantic_summary)
+        is_spammy, is_politically_loaded, quality_score, has_comments, semantic_summary, has_about_page)
         
     except (json.JSONDecodeError, KeyError, Exception) as e:
         logging.warning(f"Error parsing analysis data for {domain_name}: {e}")
@@ -377,22 +406,79 @@ async def insert_domain_record(conn, domain_name, analysis_json):
             ON CONFLICT (domain_name_text) DO NOTHING;
         """, domain_id, domain_name, str(analysis_json)[:2000])
 
+async def try_about_page(page, domain):
+    """Try to navigate to /about page and check if it exists and has content."""
+    about_urls = [
+        f"https://{domain}/about",
+        f"https://{domain}/about-us",
+        f"https://{domain}/about.html"
+    ]
+    
+    for about_url in about_urls:
+        try:
+            response = await page.goto(about_url, wait_until="domcontentloaded", timeout=10000)
+            
+            # Check if page loaded successfully (not 404, 403, etc.)
+            if response and response.status < 400:
+                # Check if page has meaningful content (not redirect to homepage)
+                current_url = page.url.lower()
+                if "about" in current_url:
+                    # Verify there's actual content
+                    content_check = await page.evaluate("""
+                        () => {
+                            const body = document.body;
+                            if (!body) return false;
+                            const text = body.innerText || '';
+                            return text.trim().length > 100; // Has substantial content
+                        }
+                    """)
+                    if content_check:
+                        logging.info(f"✅ Found about page: {about_url}")
+                        return True
+            
+        except Exception as e:
+            logging.debug(f"About page {about_url} failed: {e}")
+            continue
+    
+    return False
+
 async def crawl_one(conn, browser):
     row = await claim_one_domain(conn)
     if not row:
         return False  # No more domains
 
     domain = row["domain_name_text"]
-    url = f"https://{domain}"
-    logging.info(f"Crawling {url}")
+    logging.info(f"Crawling {domain}")
+    
+    has_about_page = False
+    analysis_summary = None
 
     try:
         page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        summary = await analyze_page(page)
-        await insert_domain_record(conn, domain, summary)
-        logging.info(f"✅ Inserted: {domain}")
+        
+        # Try /about page first
+        has_about_page = await try_about_page(page, domain)
+        
+        if has_about_page:
+            logging.info(f"Analyzing about page for {domain}")
+            analysis_summary = await analyze_page(page)
+        else:
+            # Fallback to main page
+            main_url = f"https://{domain}"
+            logging.info(f"No about page found, analyzing main page: {main_url}")
+            await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
+            analysis_summary = await analyze_page(page)
+        
+        # Update the analysis to include about page detection
+        if analysis_summary:
+            analysis_data = json.loads(analysis_summary)
+            analysis_data["has_about_page"] = has_about_page
+            analysis_summary = json.dumps(analysis_data)
+        
+        await insert_domain_record(conn, domain, analysis_summary)
+        logging.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
         await page.close()
+        
     except Exception as e:
         logging.warning(f"❌ Failed: {domain} — {e}")
     return True
