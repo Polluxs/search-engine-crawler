@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 load_dotenv()
 DB_URL = os.getenv("POSTGRES_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -422,11 +423,22 @@ async def crawl_one(conn, browser):
 async def main():
     conn = await asyncpg.connect(DB_URL)
     async with AsyncCamoufox(headless=True) as browser:
-        while True:
-            more = await crawl_one(conn, browser)
-            if not more:
-                logging.info("🎉 All domains processed.")
-                break
+        if ENVIRONMENT == "production":
+            # Production: infinite loop
+            while True:
+                more = await crawl_one(conn, browser)
+                if not more:
+                    logging.info("🎉 All domains processed.")
+                    break
+        else:
+            # Development: loop only 10 times
+            for i in range(10):
+                more = await crawl_one(conn, browser)
+                if not more:
+                    logging.info("🎉 All domains processed.")
+                    break
+                logging.info(f"Non production mode: completed {i+1}/10 crawls")
+            logging.info("Development mode: finished 10 crawls")
     await conn.close()
 
 if __name__ == "__main__":
