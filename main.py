@@ -16,7 +16,28 @@ DB_URL = os.getenv("POSTGRES_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
-logging.basicConfig(level=logging.INFO)
+class CustomRailwayLogFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "time": self.formatTime(record),
+            "level": record.levelname,
+            "message": record.getMessage()
+        }
+        return json.dumps(log_record)
+
+def get_logger():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    handler = logging.StreamHandler()
+    formatter = CustomRailwayLogFormatter()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
+# Initialize Railway-compatible logger
+logger = get_logger()
 
 # Load spaCy model
 nlp = spacy.load("en_core_web_sm")
@@ -191,7 +212,7 @@ Rules:
                 raise ValueError("LLM response is not valid JSON")
                 
     except Exception as e:
-        logging.warning(f"LLM analysis failed: {e}")
+        logger.warning(f"LLM analysis failed: {e}")
         return None
 
 async def analyze_page(page):
@@ -370,11 +391,11 @@ async def try_about_page(page, domain):
                         }
                     """)
                     if content_check:
-                        logging.info(f"✅ Found about page: {about_url}")
+                        logger.info(f"✅ Found about page: {about_url}")
                         return True
             
         except Exception as e:
-            logging.debug(f"About page {about_url} failed: {e}")
+            logger.debug(f"About page {about_url} failed: {e}")
             continue
     
     return False
@@ -385,7 +406,7 @@ async def crawl_one(conn, browser):
         return False  # No more domains
 
     domain = row["domain_name_text"]
-    logging.info(f"Crawling {domain}")
+    logger.info(f"Crawling {domain}")
     
     has_about_page = False
     analysis_summary = None
@@ -397,12 +418,12 @@ async def crawl_one(conn, browser):
         has_about_page = await try_about_page(page, domain)
         
         if has_about_page:
-            logging.info(f"Analyzing about page for {domain}")
+            logger.info(f"Analyzing about page for {domain}")
             analysis_summary = await analyze_page(page)
         else:
             # Fallback to main page
             main_url = f"https://{domain}"
-            logging.info(f"No about page found, analyzing main page: {main_url}")
+            logger.info(f"No about page found, analyzing main page: {main_url}")
             await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
             analysis_summary = await analyze_page(page)
         
@@ -413,11 +434,11 @@ async def crawl_one(conn, browser):
             analysis_summary = json.dumps(analysis_data)
         
         await insert_domain_record(conn, domain, analysis_summary)
-        logging.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
+        logger.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
         await page.close()
         
     except Exception as e:
-        logging.warning(f"❌ Failed: {domain} — {e}")
+        logger.warning(f"❌ Failed: {domain} — {e}")
     return True
 
 async def main():
@@ -428,17 +449,17 @@ async def main():
             while True:
                 more = await crawl_one(conn, browser)
                 if not more:
-                    logging.info("🎉 All domains processed.")
+                    logger.info("🎉 All domains processed.")
                     break
         else:
             # Development: loop only 10 times
             for i in range(10):
                 more = await crawl_one(conn, browser)
                 if not more:
-                    logging.info("🎉 All domains processed.")
+                    logger.info("🎉 All domains processed.")
                     break
-                logging.info(f"Non production mode: completed {i+1}/10 crawls")
-            logging.info("Development mode: finished 10 crawls")
+                logger.info(f"Non production mode: completed {i+1}/10 crawls")
+            logger.info("Development mode: finished 10 crawls")
     await conn.close()
 
 if __name__ == "__main__":
