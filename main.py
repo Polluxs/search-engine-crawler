@@ -8,7 +8,6 @@ from camoufox.async_api import AsyncCamoufox
 from dotenv import load_dotenv
 import os
 import spacy
-from langdetect import detect, LangDetectException
 from openai import AsyncOpenAI
 
 # Load environment variables
@@ -44,123 +43,80 @@ async def claim_one_domain(conn):
     return row
 
 def extract_important_tokens(text, max_tokens=500):
-    """Extract and prioritize important tokens using spaCy."""
-    # Process text with spaCy
+    """Extract and prioritize important tokens using spaCy with junk filtering."""
     doc = nlp(text)
-    
-    # Collect important tokens with priorities
-    important_tokens = []
-    
-    # Priority 1: Named entities (all types)
-    entities = []
-    for ent in doc.ents:
-        if len(ent.text.strip()) > 2:
-            entities.append(ent.text.strip())
-    
-    # Priority 2: Noun phrases and important nouns
-    noun_phrases = []
-    important_nouns = []
-    for chunk in doc.noun_chunks:
-        if len(chunk.text.split()) > 1 and len(chunk.text) > 3:
-            noun_phrases.append(chunk.text.strip())
-    
-    for token in doc:
-        if (token.pos_ in ["NOUN", "PROPN"] and 
-            not token.is_stop and 
-            not token.is_punct and 
-            len(token.text) > 2):
-            important_nouns.append(token.text.lower())
-    
-    # Priority 3: Important adjectives and verbs
-    descriptors = []
-    for token in doc:
-        if (token.pos_ in ["ADJ", "VERB"] and 
-            not token.is_stop and 
-            not token.is_punct and 
-            len(token.text) > 3):
-            descriptors.append(token.text.lower())
-    
-    # Combine and deduplicate
+
+    # Custom junk words to ignore (UI scaffolding, marketing, filler)
+    JUNK_WORDS = {
+        "account", "login", "signup", "subscribe", "sign", "register", "create", "click",
+        "platform", "solution", "experience", "support", "discount", "offers", "order",
+        "shop", "app", "center", "categories", "policy", "privacy", "help", "b2b", "search",
+        "value", "promotion", "delivery", "products", "production", "contact", "username",
+        "password", "terms", "conditions", "newsletter", "settings", "mobile", "website",
+        "visit", "start", "email"
+    }
+
+    # Priority 1: Named entities (excluding numeric junk)
+    entities = [
+        ent.text.strip()
+        for ent in doc.ents
+        if len(ent.text.strip()) > 2 and not any(char.isdigit() for char in ent.text)
+    ]
+
+    # Priority 2a: Noun phrases (filtered and meaningful)
+    noun_phrases = [
+        chunk.text.strip().lower()
+        for chunk in doc.noun_chunks
+        if (
+            len(chunk.text.split()) > 1 and
+            len(chunk.text) > 3 and
+            not any(tok.lemma_.lower() in JUNK_WORDS for tok in chunk)
+        )
+    ]
+
+    # Priority 2b: Important nouns and proper nouns
+    important_nouns = [
+        token.lemma_.lower()
+        for token in doc
+        if (
+            token.pos_ in ["NOUN", "PROPN"] and
+            not token.is_stop and
+            not token.is_punct and
+            len(token.text) > 2 and
+            token.lemma_.lower() not in JUNK_WORDS
+        )
+    ]
+
+    # Priority 3: Adjectives and verbs (meaningful ones only)
+    descriptors = [
+        token.lemma_.lower()
+        for token in doc
+        if (
+            token.pos_ in ["ADJ", "VERB"] and
+            not token.is_stop and
+            not token.is_punct and
+            len(token.text) > 3 and
+            token.lemma_.lower() not in JUNK_WORDS
+        )
+    ]
+
+    # Combine and deduplicate while preserving order
     all_tokens = (
-        entities[:20] +  # Top entities
-        noun_phrases[:30] +  # Top noun phrases
-        list(set(important_nouns))[:40] +  # Unique nouns
-        list(set(descriptors))[:20]  # Unique descriptors
+        entities[:20] +
+        noun_phrases[:30] +
+        list(dict.fromkeys(important_nouns))[:40] +
+        list(dict.fromkeys(descriptors))[:20]
     )
-    
-    # Remove duplicates while preserving order
+
     seen = set()
     unique_tokens = []
     for token in all_tokens:
-        if token.lower() not in seen and len(token.strip()) > 0:
-            seen.add(token.lower())
+        norm = token.lower().strip()
+        if norm not in seen and len(norm) > 2:
+            seen.add(norm)
             unique_tokens.append(token.strip())
-    
-    # Truncate to max_tokens
+
     return unique_tokens[:max_tokens]
-
-def detect_language(text):
-    """Detect primary language of text content."""
-    try:
-        if len(text.strip()) < 20:
-            return "unknown"  # Default to English for short text
-        detected = detect(text)
-        return detected if detected else "en"
-    except (LangDetectException, Exception):
-        return "unknown"
-
-def analyze_content_type(title, text, url_path=""):
-    """Analyze content type based on title, text, and URL patterns."""
-    title_lower = title.lower()
-    text_lower = text.lower()
-    url_lower = url_path.lower()
-    
-    # Check for specific patterns
-    if any(word in title_lower or word in text_lower for word in ["blog", "post", "article", "diary"]):
-        return "blog"
-    elif any(word in title_lower or word in text_lower for word in ["forum", "discussion", "thread", "reply"]):
-        return "forum"
-    elif any(word in title_lower or word in text_lower for word in ["documentation", "docs", "guide", "tutorial", "manual"]):
-        return "docs"
-    elif any(word in title_lower or word in text_lower for word in ["shop", "store", "buy", "price", "cart", "checkout"]):
-        return "ecommerce"
-    elif any(word in title_lower or word in text_lower for word in ["news", "breaking", "report", "journalist"]):
-        return "news"
-    elif any(word in title_lower or word in text_lower for word in ["portfolio", "gallery", "showcase", "work"]):
-        return "portfolio"
-    elif any(word in title_lower or word in text_lower for word in ["company", "business", "service", "about us"]):
-        return "corporate"
-    elif any(word in title_lower or word in text_lower for word in ["personal", "about me", "my story"]):
-        return "personal"
-    else:
-        return "general"
-
-def detect_commercial_intent(title, text):
-    """Detect if the site has commercial intent."""
-    combined_text = (title + " " + text).lower()
-    commercial_indicators = [
-        "buy", "purchase", "price", "sale", "discount", "shop", "store",
-        "cart", "checkout", "payment", "order", "shipping", "product",
-        "subscribe", "premium", "upgrade", "contact us", "hire", "service"
-    ]
-    return any(word in combined_text for word in commercial_indicators)
-
-def detect_communication_goal(title, text, content_type):
-    """Determine the primary communication goal."""
-    combined_text = (title + " " + text).lower()
-    
-    if content_type in ["ecommerce", "corporate"]:
-        return "sell"
-    elif any(word in combined_text for word in ["tutorial", "guide", "how to", "learn", "course"]):
-        return "teach"
-    elif any(word in combined_text for word in ["news", "report", "update", "announce"]):
-        return "inform"
-    elif content_type == "blog" and any(word in combined_text for word in ["opinion", "think", "believe", "rant"]):
-        return "opinion"
-    elif content_type == "personal":
-        return "share"
-    else:
-        return "inform"
 
 def detect_has_comments(page_html):
     """Detect if the page has a comment system."""
@@ -281,10 +237,10 @@ async def analyze_page(page):
     cleaned_text = re.sub(r'[^\w\s\-\.\,\!\?]', ' ', cleaned_text)
 
     # Extract important tokens for content preparation
-    key_tokens = extract_important_tokens(cleaned_text, max_tokens=400)
+    key_tokens = extract_important_tokens(cleaned_text, max_tokens=500)
 
     # Create clean content for LLM analysis (limit to ~500 tokens)
-    summary_tokens = key_tokens[:100]
+    summary_tokens = key_tokens
     raw_content_for_llm = " ".join(summary_tokens)
 
     # Detect comments first (simple rule-based check)
