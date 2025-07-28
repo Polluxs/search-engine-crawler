@@ -38,7 +38,8 @@ Please analyze this content and return a JSON object with the following fields:
   "semantic_is_spammy_bool": true/false,
   "semantic_is_politically_loaded_bool": true/false,
   "semantic_quality_score_float": 0.0-1.0,
-  "semantic_has_comments_bool": {has_comments}
+  "semantic_has_comments_bool": {has_comments},
+  "natural_language_summary_text": "A comprehensive 200-500 word summary explaining what this website is about, its purpose, target audience, and key features. Write in natural language that would help users understand the site's content and relevance."
 }}
 
 Rules:
@@ -46,7 +47,8 @@ Rules:
 - Use the exact field names provided
 - Return only valid JSON
 - Quality score: 0.8+ for high quality, 0.5-0.8 for decent, 0.5- for poor
-- Consider the URL structure and domain name in your analysis"""
+- Consider the URL structure and domain name in your analysis
+- For the summary, synthesize all the information into a natural language description that explains the website comprehensively"""
 
         response = await openai_client.chat.completions.create(
             model="gpt-3.5-turbo",

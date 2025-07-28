@@ -40,7 +40,7 @@ async def insert_domain(conn, domain_name, llm_analysis, has_about_page=False):
     is_politically_loaded = llm_analysis.get("semantic_is_politically_loaded_bool", False)
     quality_score = llm_analysis.get("semantic_quality_score_float")
     has_comments = llm_analysis.get("semantic_has_comments_bool", False)
-    semantic_summary = f"{content_type} content about {primary_topic}"[:2000]
+    natural_language_summary = llm_analysis.get("natural_language_summary_text", "")[:2000]
 
     await conn.execute("""
         INSERT INTO domain (
@@ -91,7 +91,7 @@ async def insert_domain(conn, domain_name, llm_analysis, has_about_page=False):
     """,
     domain_id, domain_name, content_type, primary_topic, keywords, language,
     communication_goal, author_type, audience_type, content_vibe, is_commercial,
-    is_spammy, is_politically_loaded, quality_score, has_comments, semantic_summary, has_about_page)
+    is_spammy, is_politically_loaded, quality_score, has_comments, natural_language_summary, has_about_page)
 
 
 async def delete_domain_ingestion(conn, domain_name):
