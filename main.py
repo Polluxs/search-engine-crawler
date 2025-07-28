@@ -213,7 +213,7 @@ Rules:
                 
     except Exception as e:
         logger.warning(f"LLM analysis failed: {e}")
-        return None
+        raise Exception(f"LLM semantic analysis failed: {e}") from e
 
 async def analyze_page(page):
     """Extract and analyze page content for structured semantic analysis."""
@@ -268,50 +268,29 @@ async def analyze_page(page):
     # Detect comments first (simple rule-based check)
     has_comments = detect_has_comments(page_html)
 
-    # Use LLM for semantic analysis
-    llm_analysis = await analyze_with_llm(title, cleaned_text, url, has_comments)
-
-    if llm_analysis:
-        # LLM analysis successful
-        analysis_data = {
-            "raw_content": raw_content_for_llm,
-            "suggested_fields": llm_analysis,
-            "analysis_tokens": key_tokens[:50],
-            "title": title[:100],
-            "url": url
-        }
-    else:
-        # LLM analysis failed - raise exception to fail the crawl
-        raise Exception("LLM semantic analysis failed")
-
-    return json.dumps(analysis_data, ensure_ascii=False)
-        
+    # Use LLM for semantic analysis - let exceptions bubble up with details
+    return await analyze_with_llm(title, raw_content_for_llm, url, has_comments)
 
 
-async def insert_domain_record(conn, domain_name, analysis_json):
+async def insert_domain_record(conn, domain_name, llm_analysis, has_about_page=False):
     """Insert analyzed data into the domain table."""
     domain_id = uuid.uuid5(uuid.NAMESPACE_URL, domain_name)
-    
-    # Parse the analysis JSON to extract semantic fields
-    analysis_data = json.loads(analysis_json)
-    suggested_fields = analysis_data.get("suggested_fields", {})
 
-    # Prepare values with defaults
-    semantic_summary = analysis_data.get("raw_content", "")[:2000]  # Truncate if too long
-    content_type = suggested_fields.get("semantic_content_type_text", "unknown")
-    primary_topic = suggested_fields.get("semantic_primary_topic_text", "unknown")
-    keywords = suggested_fields.get("semantic_keywords_text_array", [])
-    language = suggested_fields.get("semantic_language_primary_text", "en")
-    communication_goal = suggested_fields.get("semantic_communication_goal_text", "unknown")
-    author_type = suggested_fields.get("semantic_author_type_text", "unknown")
-    audience_type = suggested_fields.get("semantic_audience_type_text", "unknown")
-    content_vibe = suggested_fields.get("semantic_content_vibe_text", "unknown")
-    is_commercial = suggested_fields.get("semantic_is_commercial_bool", False)
-    is_spammy = suggested_fields.get("semantic_is_spammy_bool", False)
-    is_politically_loaded = suggested_fields.get("semantic_is_politically_loaded_bool", False)
-    quality_score = suggested_fields.get("semantic_quality_score_float")
-    has_comments = suggested_fields.get("semantic_has_comments_bool", False)
-    has_about_page = analysis_data.get("has_about_page", False)
+    # Prepare values with defaults from LLM analysis
+    content_type = llm_analysis.get("semantic_content_type_text", "unknown")
+    primary_topic = llm_analysis.get("semantic_primary_topic_text", "unknown")
+    keywords = llm_analysis.get("semantic_keywords_text_array", [])
+    language = llm_analysis.get("semantic_language_primary_text", "en")
+    communication_goal = llm_analysis.get("semantic_communication_goal_text", "unknown")
+    author_type = llm_analysis.get("semantic_author_type_text", "unknown")
+    audience_type = llm_analysis.get("semantic_audience_type_text", "unknown")
+    content_vibe = llm_analysis.get("semantic_content_vibe_text", "unknown")
+    is_commercial = llm_analysis.get("semantic_is_commercial_bool", False)
+    is_spammy = llm_analysis.get("semantic_is_spammy_bool", False)
+    is_politically_loaded = llm_analysis.get("semantic_is_politically_loaded_bool", False)
+    quality_score = llm_analysis.get("semantic_quality_score_float")
+    has_comments = llm_analysis.get("semantic_has_comments_bool", False)
+    semantic_summary = f"{content_type} content about {primary_topic}"[:2000]
 
     await conn.execute("""
         INSERT INTO domain (
@@ -427,13 +406,7 @@ async def crawl_one(conn, browser):
             await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
             analysis_summary = await analyze_page(page)
         
-        # Update the analysis to include about page detection
-        if analysis_summary:
-            analysis_data = json.loads(analysis_summary)
-            analysis_data["has_about_page"] = has_about_page
-            analysis_summary = json.dumps(analysis_data)
-        
-        await insert_domain_record(conn, domain, analysis_summary)
+        await insert_domain_record(conn, domain, analysis_summary, has_about_page)
         logger.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
         await page.close()
         
