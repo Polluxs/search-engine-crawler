@@ -22,9 +22,6 @@ async def crawl_one(conn, browser):
     domain = row["domain_name_text"]
     logger.info(f"Crawling {domain}")
     
-    has_about_page = False
-    analysis_summary = None
-
     try:
         page = await browser.new_page()
         
