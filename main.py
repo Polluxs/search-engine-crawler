@@ -272,7 +272,7 @@ async def analyze_page(page):
     return await analyze_with_llm(title, raw_content_for_llm, url, has_comments)
 
 
-async def insert_domain_record(conn, domain_name, llm_analysis, has_about_page=False):
+async def insert_domain(conn, domain_name, llm_analysis, has_about_page=False):
     """Insert analyzed data into the domain table."""
     domain_id = uuid.uuid5(uuid.NAMESPACE_URL, domain_name)
 
@@ -342,6 +342,17 @@ async def insert_domain_record(conn, domain_name, llm_analysis, has_about_page=F
     domain_id, domain_name, content_type, primary_topic, keywords, language,
     communication_goal, author_type, audience_type, content_vibe, is_commercial,
     is_spammy, is_politically_loaded, quality_score, has_comments, semantic_summary, has_about_page)
+
+async def delete_domain_ingestion(conn, domain_name):
+    """Clean up domain from domain_ingestion after successful processing."""
+    # Log that we should delete from domain_ingestion (actual deletion commented out for now)
+    logger.info(f"Successfully processed {domain_name} - should delete from domain_ingestion")
+    
+    # TODO: Uncomment this when ready to clean up processed domains
+    # await conn.execute("""
+    #     DELETE FROM domain_ingestion 
+    #     WHERE domain_name_text = $1
+    # """, domain_name)
         
 async def try_about_page(page, domain):
     """Try to navigate to /about page and check if it exists and has content."""
@@ -406,7 +417,8 @@ async def crawl_one(conn, browser):
             await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
             analysis_summary = await analyze_page(page)
         
-        await insert_domain_record(conn, domain, analysis_summary, has_about_page)
+        await insert_domain(conn, domain, analysis_summary, has_about_page)
+        await delete_domain_ingestion(conn, domain)
         logger.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
         await page.close()
         
