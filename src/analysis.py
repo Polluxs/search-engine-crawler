@@ -20,7 +20,7 @@ async def analyze_with_llm(title, cleaned_text, url, has_comments):
 WEBSITE DATA:
 Title: {title}
 URL: {url}
-Content: {cleaned_text[:2000]}  # Limit content to stay within token limits
+Content: {cleaned_text}  # Limit content to stay within token limits
 Has Comments: {has_comments}
 
 Please analyze this content and return a JSON object with the following fields:
@@ -57,7 +57,7 @@ Rules:
                 {"role": "user", "content": prompt}
             ],
             temperature=0.1,
-            max_tokens=500
+            max_tokens=1000
         )
         
         response_text = response.choices[0].message.content.strip()
