@@ -33,12 +33,14 @@ Please analyze this content and return a JSON object with the following fields:
   "semantic_communication_goal_text": "sell|teach|inform|share|entertain|rant|advertise",
   "semantic_author_type_text": "individual|company|organization|government|unknown",
   "semantic_audience_type_text": "general|beginner|expert|professional|consumer|developer",
-  "semantic_content_vibe_text": "professional|casual|academic|commercial|personal|technical|creative",
+  "semantic_tone_text": "dry|humorous|sarcastic|serious|playful|authoritative|conversational|inspiring",
+  "semantic_formality_text": "casual|formal|semi-formal|academic|colloquial",
+  "semantic_vibe_text": "corporate|edgy|minimalist|trendy|traditional|quirky|professional",
+  "semantic_site_type_text": "company blog|wiki|comparison site|tutorial site|news site|portfolio|landing page|documentation",
   "semantic_is_commercial_bool": true/false,
   "semantic_is_spammy_bool": true/false,
   "semantic_is_politically_loaded_bool": true/false,
   "semantic_quality_score_float": 0.0-1.0,
-  "semantic_has_comments_bool": {has_comments},
   "natural_language_summary_text": "A comprehensive 200-500 word summary explaining what this website is about, its purpose, target audience, and key features. Write in natural language that would help users understand the site's content and relevance."
 }}
 
