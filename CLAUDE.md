@@ -57,3 +57,22 @@ The crawler expects two tables:
 - `playwright`: Browser automation
 - `asyncpg`: Async PostgreSQL driver
 - `python-dotenv`: Environment variable loading
+
+## Code Style Preferences
+
+### Method Organization
+- **Organize methods by clear actions, not by line count**
+- Prefer fewer, comprehensive methods over many small fragmented ones
+- Each method should have a single, well-defined responsibility
+- Avoid unnecessary abstractions that create method sprawl
+
+### Variable Naming
+- Use **snake_case** for all variables and function names (tiger style)
+- Be descriptive: `metadata_description` not `description`
+- Avoid abbreviations unless they're domain-specific and clear
+
+### Method Design Principles
+- Consolidate overlapping logic into single comprehensive methods
+- Minimize browser/API calls by batching operations
+- Keep methods focused on **what they do** rather than arbitrary size limits
+- Prefer clear, action-oriented method names: `extract_page_data()` vs `analyze_page()`
