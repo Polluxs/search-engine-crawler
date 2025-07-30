@@ -84,110 +84,83 @@ Rules:
         raise Exception(f"LLM semantic analysis failed: {e}") from e
 
 
-async def analyze_page(page):
-    """Extract and analyze page content for structured semantic analysis."""
+async def extract_page_data(page, max_content_tokens=250):
+    """Extract all page data: content, metadata, and features in one comprehensive method."""
     await page.wait_for_selector("body", timeout=10000)
 
-    # Extract basic metadata
-    title = await page.title()
-    url = page.url
-
-    # Get full HTML for comment detection and metadata extraction
-    page_html = await page.content()
-    
-    # Extract metadata from HTML head
-    metadata = await page.evaluate("""
+    # Single JavaScript evaluation to get everything at once
+    page_data = await page.evaluate("""
         () => {
-            const meta = {};
+            // Extract metadata
+            const getMetaContent = (selector) => {
+                const el = document.querySelector(selector);
+                return el ? el.getAttribute('content') : '';
+            };
             
-            // Get meta description
-            const description = document.querySelector('meta[name="description"]');
-            meta.description = description ? description.getAttribute('content') : '';
-            
-            // Get meta keywords
-            const keywords = document.querySelector('meta[name="keywords"]');
-            meta.keywords = keywords ? keywords.getAttribute('content') : '';
-            
-            // Get author
-            const author = document.querySelector('meta[name="author"]');
-            meta.author = author ? author.getAttribute('content') : '';
-            
-            // Get language from meta or html tag
-            const contentLang = document.querySelector('meta[http-equiv="content-language"]');
-            const htmlLang = document.documentElement.getAttribute('lang');
-            meta.language = contentLang ? contentLang.getAttribute('content') : 
-                           htmlLang ? htmlLang : 'en';
-            
-            // Get viewport info
-            const viewport = document.querySelector('meta[name="viewport"]');
-            meta.viewport = viewport ? viewport.getAttribute('content') : '';
-            
-            // Check for social media meta tags
-            const ogTitle = document.querySelector('meta[property="og:title"]');
-            const ogDescription = document.querySelector('meta[property="og:description"]');
-            const ogType = document.querySelector('meta[property="og:type"]');
-            
-            meta.og_title = ogTitle ? ogTitle.getAttribute('content') : '';
-            meta.og_description = ogDescription ? ogDescription.getAttribute('content') : '';
-            meta.og_type = ogType ? ogType.getAttribute('content') : '';
-            
-            return meta;
-        }
-    """)
+            const metadata = {
+                description: getMetaContent('meta[name="description"]') || getMetaContent('meta[property="og:description"]'),
+                keywords: getMetaContent('meta[name="keywords"]'),
+                author: getMetaContent('meta[name="author"]'),
+                language: getMetaContent('meta[http-equiv="content-language"]') || 
+                         document.documentElement.getAttribute('lang') || 'en',
+                og_title: getMetaContent('meta[property="og:title"]'),
+                og_description: getMetaContent('meta[property="og:description"]'),
+                og_type: getMetaContent('meta[property="og:type"]')
+            };
 
-    # Extract text content from body_text, excluding script/style tags
-    body_text = await page.evaluate("""
-        () => {
-            // Remove script and style elements
-            const scripts = document.querySelectorAll('script, style, nav, footer, header');
-            scripts.forEach(el => el.remove());
+            // Extract body content with cleanup
+            const removeElements = document.querySelectorAll('script, style, nav, footer, header');
+            removeElements.forEach(el => el.remove());
             
-            // Get main content areas first
-            return document.querySelector('main, [role="main"], .content, .main-content, article');
-        }
-    """)
-
-    if not body_text or len(body_text.strip()) < 50:
-        body_text = await page.evaluate("""
-            () => {
-                // Remove script and style elements
-                const scripts = document.querySelectorAll('script, style, nav, footer, header');
-                scripts.forEach(el => el.remove());
-
-                // Fallback to body
-                return document.body.innerText;
+            // Try main content areas first
+            let body_text = null;
+            const mainSelectors = ['main', '[role="main"]', '.content', '.main-content', 'article'];
+            for (const selector of mainSelectors) {
+                const main = document.querySelector(selector);
+                if (main && main.innerText.trim().length > 50) {
+                    body_text = main.innerText;
+                    break;
+                }
             }
-        """)
+            
+            // Fallback to full body
+            if (!body_text) {
+                body_text = document.body.innerText || '';
+            }
 
-    if not body_text or len(body_text.strip()) < 50:
-        raise Exception("Body is too short")
+            return {
+                metadata: metadata,
+                body_text: body_text,
+                full_html: document.documentElement.outerHTML
+            };
+        }
+    """)
 
-    # Clean and normalize text
-    cleaned_text = re.sub(r'\s+', ' ', body_text.strip())
+    # Validate content length
+    if not page_data['body_text'] or len(page_data['body_text'].strip()) < 50:
+        raise Exception("Body content too short")
+
+    # Clean and process content
+    cleaned_text = re.sub(r'\s+', ' ', page_data['body_text'].strip())
     cleaned_text = re.sub(r'[^\w\s\-\.\,\!\?]', ' ', cleaned_text)
+    
+    # Extract important tokens and metadata description
+    content_tokens = extract_important_tokens(cleaned_text, max_tokens=max_content_tokens)
+    metadata_description = process_metadata_for_llm(page_data['metadata'], max_tokens=50)
+    has_comments = detect_has_comments(page_data['full_html'])
 
-    # Extract important tokens for content preparation
-    key_tokens = extract_important_tokens(cleaned_text, max_tokens=500)
-
-    # Create clean content for LLM analysis (limit to ~500 tokens)
-    summary_tokens = key_tokens
-    raw_content_for_llm = " ".join(summary_tokens)
-
-    # Detect comments first (simple rule-based check)
-    has_comments = detect_has_comments(page_html)
-
-    # Process and clean metadata description (~100 tokens)
-    cleaned_description = process_metadata_for_llm(metadata, max_tokens=100)
-
-    # Use LLM for semantic analysis - let exceptions bubble up with details
-    return await analyze_with_llm(title, raw_content_for_llm, url, has_comments, cleaned_description)
+    return {
+        'content_tokens': content_tokens,
+        'has_comments': has_comments,
+        'metadata_description': metadata_description
+    }
 
 
 async def try_about_page(page, domain):
-    """Try to navigate to /about page and check if it exists and has content."""
+    """Check if domain has a valuable about page (simple existence check)."""
     about_urls = [
         f"https://{domain}/about",
-        f"https://{domain}/about-us",
+        f"https://{domain}/about-us", 
         f"https://{domain}/about.html"
     ]
     
@@ -197,7 +170,7 @@ async def try_about_page(page, domain):
             
             # Check if page loaded successfully (not 404, 403, etc.)
             if response and response.status < 400:
-                # Check if page has meaningful content (not redirect to homepage)
+                # Check if page has meaningful content and isn't just a redirect
                 current_url = page.url.lower()
                 if "about" in current_url:
                     # Verify there's actual content
@@ -218,3 +191,87 @@ async def try_about_page(page, domain):
             continue
     
     return False
+
+
+async def analyze_domain_with_llm(domain, homepage_data, about_data=None):
+    """Perform comprehensive LLM analysis combining homepage and optional about page data."""
+    # Prepare content for analysis
+    homepage_content = " ".join(homepage_data['content_tokens'])
+    about_content = " ".join(about_data['content_tokens'][:100]) if about_data else ""
+    metadata_description = homepage_data['metadata_description']
+    has_comments = homepage_data['has_comments']
+    
+    # Create analysis prompt
+    prompt = f"""Analyze this website content and provide semantic classification in valid JSON format.
+
+IMPORTANT: The HOMEPAGE content is the PRIMARY and MOST TRUSTED source. About page content may be redirected or inaccurate.
+
+WEBSITE DATA:
+Domain: {domain}
+Homepage Content (PRIMARY): {homepage_content}
+About Page Content (SUPPLEMENTARY): {about_content if about_content else "Not available"}
+Metadata Description: {metadata_description}
+Has Comments: {has_comments}
+
+Please analyze this content and return a JSON object with the following fields:
+
+{{
+  "semantic_content_type_text": "blog|forum|docs|ecommerce|news|portfolio|corporate|personal|marketplace|landing|other",
+  "semantic_primary_topic_text": "main topic in 1-2 words (e.g., 'technology', 'art', 'fitness')",
+  "semantic_keywords_text_array": ["5-10 most relevant keywords/phrases"],
+  "semantic_language_primary_text": "language code (e.g., 'en', 'es', 'fr')",
+  "semantic_communication_goal_text": "sell|teach|inform|share|entertain|rant|advertise",
+  "semantic_author_type_text": "individual|company|organization|government|unknown",
+  "semantic_audience_type_text": "general|beginner|expert|professional|consumer|developer",
+  "semantic_tone_text": "dry|humorous|sarcastic|serious|playful|authoritative|conversational|inspiring",
+  "semantic_formality_text": "casual|formal|semi-formal|academic|colloquial",
+  "semantic_vibe_text": "corporate|edgy|minimalist|trendy|traditional|quirky|professional",
+  "semantic_site_type_text": "company blog|wiki|comparison site|tutorial site|news site|portfolio|landing page|documentation",
+  "semantic_is_commercial_bool": true/false,
+  "semantic_is_spammy_bool": true/false,
+  "semantic_is_politically_loaded_bool": true/false,
+  "semantic_quality_score_float": 0.0-1.0,
+  "natural_language_summary_text": "A comprehensive 200-500 word summary explaining what this website is about, its purpose, target audience, and key features. Write in natural language that would help users understand the site's content and relevance.",
+  "llm_prior_knowledge_text": "If you recognize this domain or have knowledge about it from your training data, provide additional context about what this website/service/company is known for. If you don't recognize it, state 'No prior knowledge available.'"
+}}
+
+Rules:
+- PRIORITIZE homepage content over about page content when they conflict
+- Be accurate and specific
+- Use the exact field names provided
+- Return only valid JSON
+- Quality score: 0.8+ for high quality, 0.5-0.8 for decent, 0.5- for poor
+- Consider the URL structure and domain name in your analysis
+- Use the provided metadata description to enhance your analysis, but trust homepage content more
+- For the summary, synthesize all information with homepage content as the primary source
+- Include your prior knowledge about the domain if available"""
+
+    try:
+        response = await openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert web content analyst. Return only valid JSON as requested. Prioritize homepage content as the primary truth source."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=1200
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Parse JSON response
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            # Try to extract JSON from response if LLM added extra text
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+            else:
+                raise ValueError("LLM response is not valid JSON")
+                
+    except Exception as e:
+        logger.warning(f"LLM analysis failed: {e}")
+        raise Exception(f"LLM semantic analysis failed: {e}") from e
+
+

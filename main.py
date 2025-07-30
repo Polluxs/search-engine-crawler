@@ -6,7 +6,7 @@ import os
 
 from src.logging_config import logger
 from src.database import claim_one_domain, insert_domain, delete_domain_ingestion
-from src.analysis import analyze_page, try_about_page
+from src.analysis import extract_page_data, try_about_page, analyze_domain_with_llm
 
 # Load environment variables
 load_dotenv()
@@ -25,18 +25,21 @@ async def crawl_one(conn, browser):
     try:
         page = await browser.new_page()
         
-        # Try /about page first
-        has_about_page = await try_about_page(page, domain)
+        # Always start with homepage analysis
+        main_url = f"https://{domain}"
+        logger.info(f"Analyzing homepage: {main_url}")
+        await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
+        homepage_content = await extract_page_data(page)
         
+        # Try to get about page content as supplementary
+        about_content = None
+        has_about_page = await try_about_page(page, domain)
         if has_about_page:
-            logger.info(f"Analyzing about page for {domain}")
-            analysis_summary = await analyze_page(page)
-        else:
-            # Fallback to main page
-            main_url = f"https://{domain}"
-            logger.info(f"No about page found, analyzing main page: {main_url}")
-            await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
-            analysis_summary = await analyze_page(page)
+            logger.info(f"Found about page, adding supplementary content")
+            about_content = await extract_page_data(page, max_content_tokens=100)
+        
+        # Perform LLM analysis with homepage as primary
+        analysis_summary = await analyze_domain_with_llm(domain, homepage_content, about_content)
         
         await insert_domain(conn, domain, analysis_summary, has_about_page)
         await delete_domain_ingestion(conn, domain)
