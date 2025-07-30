@@ -80,6 +80,28 @@ def extract_important_tokens(text, max_tokens=500):
     return unique_tokens[:max_tokens]
 
 
+def clean_metadata_field(text, max_tokens=50):
+    """Clean and limit a single metadata field using spaCy."""
+    if not text or not text.strip():
+        return ""
+    
+    # Use extract_important_tokens but with a lower limit for metadata
+    cleaned_tokens = extract_important_tokens(text, max_tokens=max_tokens)
+    return " ".join(cleaned_tokens)
+
+
+def process_metadata_for_llm(metadata, max_tokens=100):
+    """Process and clean only the description field from metadata."""
+    # Only use description - other fields are often redundant with title/content
+    description = metadata.get('description', '') or metadata.get('og_description', '')
+    
+    if not description:
+        return ""
+    
+    # Clean the description using spaCy
+    return clean_metadata_field(description, max_tokens=max_tokens)
+
+
 def detect_has_comments(page_html):
     """Detect if the page has a comment system."""
     comment_indicators = [

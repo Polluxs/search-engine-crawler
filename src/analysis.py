@@ -2,7 +2,7 @@ import json
 import re
 from openai import AsyncOpenAI
 from src.logging_config import logger
-from src.text_processing import extract_important_tokens, detect_has_comments
+from src.text_processing import extract_important_tokens, detect_has_comments, process_metadata_for_llm
 import os
 
 
@@ -11,7 +11,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 
-async def analyze_with_llm(title, cleaned_text, url, has_comments):
+async def analyze_with_llm(title, cleaned_text, url, has_comments, description):
     """Use OpenAI LLM to analyze page content and return structured semantic data."""
     try:
         # Create prompt for LLM analysis
@@ -20,8 +20,9 @@ async def analyze_with_llm(title, cleaned_text, url, has_comments):
 WEBSITE DATA:
 Title: {title}
 URL: {url}
-Content: {cleaned_text}  # Limit content to stay within token limits
+Content: {cleaned_text}
 Has Comments: {has_comments}
+Description: {description}
 
 Please analyze this content and return a JSON object with the following fields:
 
@@ -50,7 +51,8 @@ Rules:
 - Return only valid JSON
 - Quality score: 0.8+ for high quality, 0.5-0.8 for decent, 0.5- for poor
 - Consider the URL structure and domain name in your analysis
-- For the summary, synthesize all the information into a natural language description that explains the website comprehensively"""
+- Use the provided description to enhance your analysis
+- For the summary, synthesize all the information including the description into a natural language explanation of the website"""
 
         response = await openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -90,8 +92,48 @@ async def analyze_page(page):
     title = await page.title()
     url = page.url
 
-    # Get full HTML for comment detection
+    # Get full HTML for comment detection and metadata extraction
     page_html = await page.content()
+    
+    # Extract metadata from HTML head
+    metadata = await page.evaluate("""
+        () => {
+            const meta = {};
+            
+            // Get meta description
+            const description = document.querySelector('meta[name="description"]');
+            meta.description = description ? description.getAttribute('content') : '';
+            
+            // Get meta keywords
+            const keywords = document.querySelector('meta[name="keywords"]');
+            meta.keywords = keywords ? keywords.getAttribute('content') : '';
+            
+            // Get author
+            const author = document.querySelector('meta[name="author"]');
+            meta.author = author ? author.getAttribute('content') : '';
+            
+            // Get language from meta or html tag
+            const contentLang = document.querySelector('meta[http-equiv="content-language"]');
+            const htmlLang = document.documentElement.getAttribute('lang');
+            meta.language = contentLang ? contentLang.getAttribute('content') : 
+                           htmlLang ? htmlLang : 'en';
+            
+            // Get viewport info
+            const viewport = document.querySelector('meta[name="viewport"]');
+            meta.viewport = viewport ? viewport.getAttribute('content') : '';
+            
+            // Check for social media meta tags
+            const ogTitle = document.querySelector('meta[property="og:title"]');
+            const ogDescription = document.querySelector('meta[property="og:description"]');
+            const ogType = document.querySelector('meta[property="og:type"]');
+            
+            meta.og_title = ogTitle ? ogTitle.getAttribute('content') : '';
+            meta.og_description = ogDescription ? ogDescription.getAttribute('content') : '';
+            meta.og_type = ogType ? ogType.getAttribute('content') : '';
+            
+            return meta;
+        }
+    """)
 
     # Extract text content from body_text, excluding script/style tags
     body_text = await page.evaluate("""
@@ -134,8 +176,11 @@ async def analyze_page(page):
     # Detect comments first (simple rule-based check)
     has_comments = detect_has_comments(page_html)
 
+    # Process and clean metadata description (~100 tokens)
+    cleaned_description = process_metadata_for_llm(metadata, max_tokens=100)
+
     # Use LLM for semantic analysis - let exceptions bubble up with details
-    return await analyze_with_llm(title, raw_content_for_llm, url, has_comments)
+    return await analyze_with_llm(title, raw_content_for_llm, url, has_comments, cleaned_description)
 
 
 async def try_about_page(page, domain):
