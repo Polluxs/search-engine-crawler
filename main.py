@@ -21,31 +21,33 @@ async def crawl_one(conn, browser):
 
     domain = row["domain_name_text"]
     logger.info(f"Crawling {domain}")
-    
+
     try:
         page = await browser.new_page()
-        
+
         # Always start with homepage analysis
         main_url = f"https://{domain}"
         logger.info(f"Analyzing homepage: {main_url}")
         await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
         homepage_content = await extract_page_data(page)
-        
+
         # Try to get about page content as supplementary
         about_content = None
         has_about_page = await try_about_page(page, domain)
         if has_about_page:
-            logger.info(f"Found about page, adding supplementary content")
+            logger.info("Found about page, adding supplementary content")
             about_content = await extract_page_data(page, max_content_tokens=100)
-        
+
         # Perform LLM analysis with homepage as primary
-        analysis_summary = await analyze_domain_with_llm(domain, homepage_content, about_content)
-        
+        analysis_summary = await analyze_domain_with_llm(
+            domain, homepage_content, about_content
+        )
+
         await insert_domain(conn, domain, analysis_summary, has_about_page)
         await delete_domain_ingestion(conn, domain)
         logger.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
         await page.close()
-        
+
     except Exception as e:
         logger.warning(f"❌ Failed: {domain} — {e}")
     return True
