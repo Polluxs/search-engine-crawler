@@ -1,5 +1,6 @@
 import asyncio
 import asyncpg
+import gc
 from camoufox.async_api import AsyncCamoufox
 from dotenv import load_dotenv
 import os
@@ -22,6 +23,7 @@ async def crawl_one(conn, browser):
     domain = row["domain_name_text"]
     logger.info(f"Crawling {domain}")
 
+    page = None
     try:
         page = await browser.new_page()
 
@@ -52,12 +54,18 @@ async def crawl_one(conn, browser):
         await insert_domain(conn, domain, analysis_summary, has_about_page)
         await delete_domain_ingestion(conn, domain)
         logger.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
-        await page.close()
 
     except Exception as e:
         logger.warning(f"❌ Failed: {domain} — {e}")
         # Record failed domain and remove from ingestion queue to prevent retries
         await record_failed_domain(conn, domain, str(e))
+    finally:
+        # Always close the page to prevent memory leaks
+        if page:
+            try:
+                await page.close()
+            except Exception:
+                pass  # Ignore close errors
     return True
 
 
@@ -78,6 +86,13 @@ async def main():
                 break
             
             crawl_count += 1
+            
+            # Periodic garbage collection to prevent memory buildup
+            # Note: gc.collect() is expensive (~10-50ms), so we do it every 5 crawls
+            # rather than every request to balance memory management with performance
+            if crawl_count % 5 == 0:
+                gc.collect()
+                logger.debug(f"Garbage collection after {crawl_count} crawls")
             
             # Check if we've reached the limit (unless it's infinite)
             if CRAWL_LIMIT != -1:
