@@ -1,4 +1,18 @@
+-- Drop existing tables and types (MVP - safe to recreate)
+DROP TABLE IF EXISTS domain CASCADE;
+DROP TABLE IF EXISTS domain_ingestion CASCADE;
+DROP TYPE IF EXISTS crawl_status_enum CASCADE;
+
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Create enum type for crawl status
+CREATE TYPE crawl_status_enum AS ENUM (
+    'pending',      -- Domain claimed but not yet processed
+    'processing',   -- Currently being crawled
+    'success',      -- Successfully crawled and analyzed
+    'failed',       -- Failed to crawl (HTTP errors, timeouts, etc.)
+    'skipped'       -- Deliberately skipped (e.g., blacklisted)
+);
 
 CREATE TABLE domain
 (
@@ -35,7 +49,7 @@ CREATE TABLE domain
     -- Crawl metadata (technical)
     crawl_first_seen_at_ts              TIMESTAMP    DEFAULT now(),
     crawl_last_attempt_at_ts            TIMESTAMP,
-    crawl_status_text                   VARCHAR(32),
+    crawl_status_text                   crawl_status_enum NOT NULL DEFAULT 'pending',
     crawl_processed_at_ts               TIMESTAMP,
     crawl_has_about_bool                BOOLEAN      NOT NULL DEFAULT false,
 
@@ -60,3 +74,6 @@ CREATE TABLE domain_ingestion
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ingestion_unlocked_discovery
     ON domain_ingestion (locked_at_ts, discovered_at_ts);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_domain_crawl_status 
+    ON domain (crawl_status_text);

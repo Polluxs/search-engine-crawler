@@ -75,7 +75,7 @@ async def insert_domain(conn, domain_name, llm_analysis, has_about_page=False):
             audit_updated_at_ts,
             semantic_summary_text
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now(), 'success', now(), $19, false, now(), now(), $20)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now(), 'success'::crawl_status_enum, now(), $19, false, now(), now(), $20)
         ON CONFLICT (domain_name_text) DO UPDATE SET
             semantic_content_type_text = EXCLUDED.semantic_content_type_text,
             semantic_primary_topic_text = EXCLUDED.semantic_primary_topic_text,
@@ -121,7 +121,7 @@ async def record_failed_domain(conn, domain_name, error_reason):
             audit_updated_at_ts,
             semantic_summary_text
         )
-        VALUES ($1, $2, now(), now(), $3, now(), now(), $4)
+        VALUES ($1, $2, now(), now(), $3::crawl_status_enum, now(), now(), $4)
         ON CONFLICT (domain_name_text) DO UPDATE SET
             crawl_last_attempt_at_ts = now(),
             crawl_status_text = EXCLUDED.crawl_status_text,

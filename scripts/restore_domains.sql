@@ -17,7 +17,7 @@ SELECT
     crawl_processed_at_ts,
     semantic_summary_text
 FROM domain 
-WHERE crawl_status_text = 'failed'
+WHERE crawl_status_text = 'failed'::crawl_status_enum
 ORDER BY domain_name_text;
 
 -- If the preview looks correct, execute this to restore failed domains:
@@ -26,7 +26,7 @@ WITH restored_domains AS (
     INSERT INTO domain_ingestion (domain_name_text, discovered_at_ts, locked_at_ts)
     SELECT domain_name_text, now(), NULL
     FROM domain 
-    WHERE crawl_status_text = 'failed'
+    WHERE crawl_status_text = 'failed'::crawl_status_enum
     ON CONFLICT (domain_name_text) DO UPDATE SET
         discovered_at_ts = now(),
         locked_at_ts = NULL
@@ -91,7 +91,7 @@ SELECT
     semantic_content_type_text,
     semantic_primary_topic_text
 FROM domain 
-WHERE crawl_status_text = 'success'
+WHERE crawl_status_text = 'success'::crawl_status_enum
 ORDER BY domain_name_text;
 
 -- If the preview looks correct, execute this to restore successful domains:
@@ -100,7 +100,7 @@ WITH restored_domains AS (
     INSERT INTO domain_ingestion (domain_name_text, discovered_at_ts, locked_at_ts)
     SELECT domain_name_text, now(), NULL
     FROM domain 
-    WHERE crawl_status_text = 'success'
+    WHERE crawl_status_text = 'success'::crawl_status_enum
     ON CONFLICT (domain_name_text) DO UPDATE SET
         discovered_at_ts = now(),
         locked_at_ts = NULL
@@ -181,6 +181,6 @@ SELECT
     crawl_last_attempt_at_ts,
     semantic_summary_text
 FROM domain 
-WHERE crawl_status_text = 'failed'
+WHERE crawl_status_text = 'failed'::crawl_status_enum
 ORDER BY crawl_last_attempt_at_ts DESC
 LIMIT 10;
