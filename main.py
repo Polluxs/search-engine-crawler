@@ -56,7 +56,7 @@ async def crawl_one(conn, browser):
         logger.info(f"✅ Inserted: {domain} (about_page: {has_about_page})")
 
     except Exception as e:
-        logger.warning(f"❌ Failed: {domain} — {e}")
+        logger.info(f"❌ Failed: {domain} — {e}")
         # Record failed domain and remove from ingestion queue to prevent retries
         await record_failed_domain(conn, domain, str(e))
     finally:
@@ -64,43 +64,58 @@ async def crawl_one(conn, browser):
         if page:
             try:
                 await page.close()
-            except Exception:
-                pass  # Ignore close errors
+                logger.debug(f"Page closed for {domain}")
+            except Exception as close_error:
+                logger.error(f"Failed to close page for {domain}: {close_error}")
     return True
+
+
+async def crawl_batch(conn, batch_size=20):
+    """Crawl a batch of domains with a fresh browser context."""
+    async with AsyncCamoufox(headless=True) as browser:
+        for i in range(batch_size):
+            more = await crawl_one(conn, browser)
+            if not more:
+                return False, i  # No more domains, return count
+        return True, batch_size  # More domains available
 
 
 async def main():
     conn = await asyncpg.connect(DB_URL)
-    async with AsyncCamoufox(headless=True) as browser:
-        # Log the crawl limit configuration
-        if CRAWL_LIMIT == -1:
-            logger.info("Starting crawler with infinite loop (CRAWL_LIMIT=-1)")
-        else:
-            logger.info(f"Starting crawler with limit of {CRAWL_LIMIT} domains")
-        
-        crawl_count = 0
+    
+    # Log the crawl limit configuration
+    if CRAWL_LIMIT == -1:
+        logger.info("Starting crawler with infinite loop (CRAWL_LIMIT=-1)")
+    else:
+        logger.info(f"Starting crawler with limit of {CRAWL_LIMIT} domains")
+    
+    crawl_count = 0
+    batch_size = 20  # Recreate browser every 20 crawls to prevent memory leaks
+    
+    try:
         while True:
-            more = await crawl_one(conn, browser)
-            if not more:
+            # Crawl a batch with fresh browser context
+            more_domains, batch_crawled = await crawl_batch(conn, batch_size)
+            crawl_count += batch_crawled
+            
+            if batch_crawled > 0:
+                logger.info(f"Batch complete: {batch_crawled} domains crawled (total: {crawl_count})")
+                
+                # Force garbage collection after each batch
+                gc.collect()
+                logger.debug(f"Browser context recycled and garbage collected after {crawl_count} crawls")
+            
+            if not more_domains:
                 logger.info("🎉 All domains processed.")
                 break
             
-            crawl_count += 1
-            
-            # Periodic garbage collection to prevent memory buildup
-            # Note: gc.collect() is expensive (~10-50ms), so we do it every 5 crawls
-            # rather than every request to balance memory management with performance
-            if crawl_count % 5 == 0:
-                gc.collect()
-                logger.debug(f"Garbage collection after {crawl_count} crawls")
-            
             # Check if we've reached the limit (unless it's infinite)
-            if CRAWL_LIMIT != -1:
-                logger.info(f"Completed {crawl_count}/{CRAWL_LIMIT} crawls")
-                if crawl_count >= CRAWL_LIMIT:
-                    logger.info(f"Reached crawl limit of {CRAWL_LIMIT}")
-                    break
-    await conn.close()
+            if CRAWL_LIMIT != -1 and crawl_count >= CRAWL_LIMIT:
+                logger.info(f"Reached crawl limit of {CRAWL_LIMIT}")
+                break
+                
+    finally:
+        await conn.close()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 import spacy
 
-# Load spaCy model
-nlp = spacy.load("en_core_web_sm")
+# Load spaCy model with minimal components to reduce memory
+# Disable components we don't need to save memory
+nlp = spacy.load("en_core_web_sm", disable=["tok2vec", "attribute_ruler"])
+# Set max_length to prevent memory issues with huge texts
+nlp.max_length = 50000
 
 def extract_important_tokens(text, max_tokens=500):
     """Extract and prioritize important tokens using spaCy with junk filtering."""
