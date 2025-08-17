@@ -105,6 +105,39 @@ async def insert_domain(conn, domain_name, llm_analysis, has_about_page=False):
     is_spammy, is_politically_loaded, quality_score, has_about_page, semantic_summary_text)
 
 
+async def record_failed_domain(conn, domain_name, error_reason):
+    """Record a failed domain attempt and remove it from ingestion queue to prevent retries."""
+    domain_id = uuid.uuid5(uuid.NAMESPACE_URL, domain_name)
+    
+    # Insert failed domain record
+    await conn.execute("""
+        INSERT INTO domain (
+            domain_id_uuid,
+            domain_name_text,
+            crawl_first_seen_at_ts,
+            crawl_last_attempt_at_ts,
+            crawl_status_text,
+            audit_created_at_ts,
+            audit_updated_at_ts,
+            semantic_summary_text
+        )
+        VALUES ($1, $2, now(), now(), $3, now(), now(), $4)
+        ON CONFLICT (domain_name_text) DO UPDATE SET
+            crawl_last_attempt_at_ts = now(),
+            crawl_status_text = EXCLUDED.crawl_status_text,
+            audit_updated_at_ts = now(),
+            semantic_summary_text = EXCLUDED.semantic_summary_text;
+    """, domain_id, domain_name, 'failed', f"Failed: {error_reason}")
+    
+    # Remove from ingestion queue to prevent retries
+    await conn.execute("""
+        DELETE FROM domain_ingestion 
+        WHERE domain_name_text = $1
+    """, domain_name)
+    
+    logger.info(f"Recorded failed domain: {domain_name} - {error_reason}")
+
+
 async def delete_domain_ingestion(conn, domain_name):
     """Clean up domain from domain_ingestion after successful processing."""
     # Log that we should delete from domain_ingestion (actual deletion commented out for now)

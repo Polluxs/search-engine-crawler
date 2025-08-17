@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import os
 
 from src.logging_config import logger
-from src.database import claim_one_domain, insert_domain, delete_domain_ingestion
+from src.database import claim_one_domain, insert_domain, delete_domain_ingestion, record_failed_domain
 from src.analysis import extract_page_data, try_about_page, analyze_domain_with_llm
 
 # Load environment variables
@@ -28,7 +28,13 @@ async def crawl_one(conn, browser):
         # Always start with homepage analysis
         main_url = f"https://{domain}"
         logger.info(f"Analyzing homepage: {main_url}")
-        await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
+        response = await page.goto(main_url, wait_until="domcontentloaded", timeout=15000)
+        
+        # Check if homepage returned a successful status code
+        if not response or response.status >= 400:
+            logger.warning(f"❌ Skipping {domain}: HTTP {response.status if response else 'No response'}")
+            raise Exception(f"Homepage returned HTTP {response.status if response else 'No response'}")
+        
         homepage_content = await extract_page_data(page)
 
         # Try to get about page content as supplementary
@@ -50,6 +56,8 @@ async def crawl_one(conn, browser):
 
     except Exception as e:
         logger.warning(f"❌ Failed: {domain} — {e}")
+        # Record failed domain and remove from ingestion queue to prevent retries
+        await record_failed_domain(conn, domain, str(e))
     return True
 
 
