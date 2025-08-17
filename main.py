@@ -11,7 +11,7 @@ from src.analysis import extract_page_data, try_about_page, analyze_domain_with_
 # Load environment variables
 load_dotenv()
 DB_URL = os.getenv("POSTGRES_URL")
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+CRAWL_LIMIT = int(os.getenv("CRAWL_LIMIT", "10"))  # -1 for infinite, default 10
 
 
 async def crawl_one(conn, browser):
@@ -56,22 +56,27 @@ async def crawl_one(conn, browser):
 async def main():
     conn = await asyncpg.connect(DB_URL)
     async with AsyncCamoufox(headless=True) as browser:
-        if ENVIRONMENT == "production":
-            # Production: infinite loop
-            while True:
-                more = await crawl_one(conn, browser)
-                if not more:
-                    logger.info("🎉 All domains processed.")
-                    break
+        # Log the crawl limit configuration
+        if CRAWL_LIMIT == -1:
+            logger.info("Starting crawler with infinite loop (CRAWL_LIMIT=-1)")
         else:
-            # Development: loop only 10 times
-            for i in range(10):
-                more = await crawl_one(conn, browser)
-                if not more:
-                    logger.info("🎉 All domains processed.")
+            logger.info(f"Starting crawler with limit of {CRAWL_LIMIT} domains")
+        
+        crawl_count = 0
+        while True:
+            more = await crawl_one(conn, browser)
+            if not more:
+                logger.info("🎉 All domains processed.")
+                break
+            
+            crawl_count += 1
+            
+            # Check if we've reached the limit (unless it's infinite)
+            if CRAWL_LIMIT != -1:
+                logger.info(f"Completed {crawl_count}/{CRAWL_LIMIT} crawls")
+                if crawl_count >= CRAWL_LIMIT:
+                    logger.info(f"Reached crawl limit of {CRAWL_LIMIT}")
                     break
-                logger.info(f"Non production mode: completed {i+1}/10 crawls")
-            logger.info("Development mode: finished 10 crawls")
     await conn.close()
 
 
