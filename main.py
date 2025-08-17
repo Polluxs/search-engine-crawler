@@ -70,13 +70,26 @@ async def crawl_one(conn, browser):
     return True
 
 
-async def crawl_batch(conn, batch_size=20):
+async def crawl_batch(conn, batch_size, current_count, limit):
     """Crawl a batch of domains with a fresh browser context."""
     async with AsyncCamoufox(headless=True) as browser:
         for i in range(batch_size):
             more = await crawl_one(conn, browser)
             if not more:
                 return False, i  # No more domains, return count
+            
+            current_count += 1
+            
+            # Show progress for each crawl
+            if limit != -1:
+                logger.info(f"Completed {current_count}/{limit} crawls")
+            else:
+                logger.info(f"Completed {current_count} crawls")
+                
+            # Stop if we've reached the limit
+            if limit != -1 and current_count >= limit:
+                return False, i + 1  # Stop crawling, return actual count
+                
         return True, batch_size  # More domains available
 
 
@@ -95,7 +108,7 @@ async def main():
     try:
         while True:
             # Crawl a batch with fresh browser context
-            more_domains, batch_crawled = await crawl_batch(conn, batch_size)
+            more_domains, batch_crawled = await crawl_batch(conn, batch_size, crawl_count, CRAWL_LIMIT)
             crawl_count += batch_crawled
             
             if batch_crawled > 0:
